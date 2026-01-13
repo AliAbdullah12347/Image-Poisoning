@@ -39,8 +39,32 @@ export default function Home() {
     }
   }
 
+  const [warmingUp, setWarmingUp] = useState(false)
+
+  const checkModelsLoaded = async (targetMode: ProtectionMode): Promise<boolean> => {
+    try {
+      const res = await axios.get('http://localhost:8000/health')
+      const loaded: string[] = res.data.models_loaded || []
+
+      let required: string[] = []
+      if (targetMode === 'speed') required = ['resnet50']
+      else if (targetMode === 'balanced') required = ['vgg19', 'resnet50']
+      else required = ['vgg19', 'resnet50', 'inception']
+
+      // Check if all required are in loaded
+      const allLoaded = required.every(m => loaded.includes(m))
+      return allLoaded
+    } catch (e) {
+      return false // Assume cold if check fails
+    }
+  }
+
   const handleProtect = async () => {
     if (!selectedFile) return
+
+    // Check warm start status
+    const isWarm = await checkModelsLoaded(mode)
+    setWarmingUp(!isWarm)
 
     setState('processing')
     setError(null)

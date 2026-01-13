@@ -300,8 +300,8 @@ async def health_check():
     return {
         "status": "healthy",
         "device": str(protector.device),
-        "models_loaded": len(protector.models),
-        "ensemble_mode": protector.use_ensemble
+        "models_loaded": list(protector.models.keys()),
+        "ensemble_mode": True # Deprecated but kept for compatibility
     }
 
 
