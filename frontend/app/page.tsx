@@ -4,10 +4,11 @@ import { useState } from 'react'
 import ImageDropzone from '@/components/ImageDropzone'
 import LoadingAnimation from '@/components/LoadingAnimation'
 import ComparisonSlider from '@/components/ComparisonSlider'
-import { Shield, Download, RefreshCw, AlertCircle, Zap, Lock, Eye, Layers } from 'lucide-react'
+import { Shield, Download, RefreshCw, AlertCircle, Zap, Lock, Eye, Layers, ChevronDown } from 'lucide-react'
 import axios from 'axios'
 
 type ProcessingState = 'idle' | 'processing' | 'success' | 'error'
+type ProtectionMode = 'speed' | 'balanced' | 'fortress'
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -16,6 +17,9 @@ export default function Home() {
   const [state, setState] = useState<ProcessingState>('idle')
   const [error, setError] = useState<string | null>(null)
   const [metrics, setMetrics] = useState<any>(null)
+
+  const [mode, setMode] = useState<ProtectionMode>('balanced')
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const handleFileSelect = (file: File | null) => {
     setSelectedFile(file)
@@ -46,9 +50,12 @@ export default function Home() {
     try {
       const formData = new FormData()
       formData.append('file', selectedFile)
-      formData.append('num_iterations', '150')
-      formData.append('learning_rate', '0.01')
-      formData.append('epsilon', '0.03')
+      formData.append('mode', mode)
+
+      // Defaults handled by backend based on mode, but we can override if advanced settings were implemented
+      // for now, we rely on mode to simplify the request
+      // formData.append('num_iterations', '150') 
+      // formData.append('epsilon', '0.03')
       formData.append('use_adaptive_epsilon', 'true')
       formData.append('robust_to_transforms', 'true')
 
@@ -163,6 +170,40 @@ export default function Home() {
                   </div>
                 </div>
 
+                {/* Protection Mode Selection */}
+                <div className="space-y-4">
+                  <label className="text-sm font-medium text-gray-400 uppercase tracking-wider flex items-center justify-between">
+                    Protection Level
+                    <span className="text-xs text-primary/50 font-mono">{mode.toUpperCase()}</span>
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <button
+                      onClick={() => setMode('speed')}
+                      className={`p-4 rounded-xl border text-left transition-all group ${mode === 'speed' ? 'bg-primary/20 border-primary shadow-[0_0_20px_-5px_rgba(255,255,0,0.3)]' : 'bg-surface/50 border-white/5 hover:border-white/20'}`}
+                    >
+                      <Zap className={`w-5 h-5 mb-2 ${mode === 'speed' ? 'text-primary' : 'text-gray-400 group-hover:text-white'}`} />
+                      <div className="font-bold text-white text-sm">Speed</div>
+                      <div className="text-xs text-gray-500 group-hover:text-gray-400">~15s</div>
+                    </button>
+                    <button
+                      onClick={() => setMode('balanced')}
+                      className={`p-4 rounded-xl border text-left transition-all group ${mode === 'balanced' ? 'bg-primary/20 border-primary shadow-[0_0_20px_-5px_rgba(255,255,0,0.3)]' : 'bg-surface/50 border-white/5 hover:border-white/20'}`}
+                    >
+                      <Shield className={`w-5 h-5 mb-2 ${mode === 'balanced' ? 'text-primary' : 'text-gray-400 group-hover:text-white'}`} />
+                      <div className="font-bold text-white text-sm">Balanced</div>
+                      <div className="text-xs text-gray-500 group-hover:text-gray-400">~45s</div>
+                    </button>
+                    <button
+                      onClick={() => setMode('fortress')}
+                      className={`p-4 rounded-xl border text-left transition-all group ${mode === 'fortress' ? 'bg-primary/20 border-primary shadow-[0_0_20px_-5px_rgba(255,255,0,0.3)]' : 'bg-surface/50 border-white/5 hover:border-white/20'}`}
+                    >
+                      <Lock className={`w-5 h-5 mb-2 ${mode === 'fortress' ? 'text-primary' : 'text-gray-400 group-hover:text-white'}`} />
+                      <div className="font-bold text-white text-sm">Fortress</div>
+                      <div className="text-xs text-gray-500 group-hover:text-gray-400">~90s</div>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Actions */}
                 <div className="space-y-4 pt-4">
                   {selectedFile && state === 'idle' && (
@@ -180,7 +221,7 @@ export default function Home() {
 
                   {state === 'processing' && (
                     <div className="w-full bg-surface/50 border border-white/5 rounded-xl p-6 flex flex-col items-center justify-center space-y-4">
-                      <LoadingAnimation />
+                      <LoadingAnimation mode={mode} />
                       <p className="text-primary font-mono text-sm animate-pulse">OPTIMIZING NOISE VECTORS...</p>
                     </div>
                   )}
@@ -282,42 +323,6 @@ export default function Home() {
               </div>
             </div>
 
-          </div>
-        </div>
-
-        {/* How it works Section */}
-        <div className="mt-32 mb-20">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold text-white mb-4">Core Architecture</h2>
-            <p className="text-gray-400">Understanding the protection mechanism</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {[
-              {
-                icon: Layers,
-                title: "Feature Extraction",
-                desc: "We analyze your image using VGG19, ResNet50, and Inception models to map how AI perceives the content."
-              },
-              {
-                icon: Zap,
-                title: "Adversarial Noise",
-                desc: "An undetectable noise vector is generated and injected into the image, targeting specific neural activations."
-              },
-              {
-                icon: Lock,
-                title: "Visual Lock",
-                desc: "Perceptual loss functions ensure the image remains visually 99.9% identical to the original artwork."
-              }
-            ].map((item, i) => (
-              <div key={i} className="glass p-8 rounded-2xl border border-white/5 hover:border-primary/20 transition-all group">
-                <div className="w-14 h-14 rounded-full bg-surface border border-white/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <item.icon className="w-7 h-7 text-primary" />
-                </div>
-                <h3 className="text-xl font-bold text-white mb-3">{item.title}</h3>
-                <p className="text-gray-400 leading-relaxed text-sm">{item.desc}</p>
-              </div>
-            ))}
           </div>
         </div>
 

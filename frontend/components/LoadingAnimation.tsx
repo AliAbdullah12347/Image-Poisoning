@@ -4,46 +4,56 @@ import { useEffect, useState } from 'react'
 import { Loader2, Sparkles, Zap, Shield, Cpu } from 'lucide-react'
 
 const loadingSteps = [
-  { icon: Cpu, text: 'INITIALIZING VGG19/RESNET...', duration: 2000 },
-  { icon: Zap, text: 'CALCULATING ADVERSARIAL GRADIENTS...', duration: 3000 },
-  { icon: Shield, text: 'INJECTING NOISE VECTOR...', duration: 4000 },
-  { icon: Sparkles, text: 'OPTIMIZING PERCEPTUAL LOSS...', duration: 5000 },
-  { icon: Loader2, text: 'CRYPTO-LOCKING FEATURES...', duration: 2000 },
+  { icon: Cpu, text: 'INITIALIZING VGG19/RESNET...', durationRatio: 0.2 },
+  { icon: Zap, text: 'CALCULATING ADVERSARIAL GRADIENTS...', durationRatio: 0.3 },
+  { icon: Shield, text: 'INJECTING NOISE VECTOR...', durationRatio: 0.2 },
+  { icon: Sparkles, text: 'OPTIMIZING PERCEPTUAL LOSS...', durationRatio: 0.2 },
+  { icon: Loader2, text: 'CRYPTO-LOCKING FEATURES...', durationRatio: 0.1 },
 ]
 
-export default function LoadingAnimation() {
+export default function LoadingAnimation({ mode }: { mode: 'speed' | 'balanced' | 'fortress' }) {
   const [currentStep, setCurrentStep] = useState(0)
   const [progress, setProgress] = useState(0)
 
+  // Estimated times based on backend performance
+  const totalDuration = {
+    'speed': 15000,
+    'balanced': 45000,
+    'fortress': 90000
+  }[mode] || 45000
+
   useEffect(() => {
     let progressValue = 0
-    const totalDuration = loadingSteps.reduce((sum, step) => sum + step.duration, 0)
+    const intervalTime = 100 // Update every 100ms
+    const totalSteps = totalDuration / intervalTime
 
     // Smooth progress interval
     const interval = setInterval(() => {
-      progressValue += 50
+      progressValue += 1
 
-      // Calculate current step based on time
-      let accumulated = 0
+      const currentProgressRatio = progressValue / totalSteps
+
+      // Calculate current step based on ratio
+      let accumulatedBox = 0
       for (let i = 0; i < loadingSteps.length; i++) {
-        accumulated += loadingSteps[i].duration
-        if (progressValue <= accumulated) {
+        accumulatedBox += loadingSteps[i].durationRatio
+        if (currentProgressRatio <= accumulatedBox) {
           setCurrentStep(i)
           break
         }
       }
 
-      const newProgress = Math.min((progressValue / totalDuration) * 100, 99)
+      const newProgress = Math.min(currentProgressRatio * 100, 99)
       setProgress(newProgress)
 
-      if (progressValue >= totalDuration) {
+      if (currentProgressRatio >= 1) {
         setProgress(100)
         clearInterval(interval)
       }
-    }, 50)
+    }, intervalTime)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [mode, totalDuration])
 
   const CurrentIcon = loadingSteps[currentStep]?.icon || Loader2
 

@@ -23,14 +23,14 @@ class ImageProtector:
     Includes robustness to transformations (JPEG compression, resizing).
     """
     
-    def __init__(self, device: Optional[str] = None, use_ensemble: bool = True):
+    def __init__(self, device: Optional[str] = None):
         """
-        Initialize the ImageProtector with ensemble models.
+        Initialize the ImageProtector.
+        Models are now lazy-loaded to reduce startup time resource usage.
         
         Args:
             device: Device to run computations on ('cuda' or 'cpu').
                    If None, automatically selects based on availability.
-            use_ensemble: If True, use multiple models for better transferability.
         """
         # Set device
         if device is None:
@@ -39,53 +39,14 @@ class ImageProtector:
             self.device = torch.device(device)
         
         print(f"Using device: {self.device}")
-        print(f"Ensemble mode: {use_ensemble}")
         
-        # Load ensemble of models for better transferability
+        # Models container - will be populated on demand
         self.models = {}
         self.feature_hooks = {}
-        self.use_ensemble = use_ensemble
         
         # Common ImageNet normalization
         self.normalize_mean = [0.485, 0.456, 0.406]
         self.normalize_std = [0.229, 0.224, 0.225]
-        
-        # Load VGG19
-        print("Loading VGG19...")
-        vgg19 = models.vgg19(pretrained=True).to(self.device)
-        vgg19.eval()
-        for param in vgg19.parameters():
-            param.requires_grad = False
-        self.models['vgg19'] = {
-            'model': vgg19,
-            'layer': 21,  # conv4_1
-            'weight': 1.0
-        }
-        
-        if use_ensemble:
-            # Load ResNet50
-            print("Loading ResNet50...")
-            resnet50 = models.resnet50(pretrained=True).to(self.device)
-            resnet50.eval()
-            for param in resnet50.parameters():
-                param.requires_grad = False
-            self.models['resnet50'] = {
-                'model': resnet50,
-                'layer': 'layer3',  # Third residual block
-                'weight': 0.8
-            }
-            
-            # Load Inception v3
-            print("Loading Inception v3...")
-            inception = models.inception_v3(pretrained=True, transform_input=False).to(self.device)
-            inception.eval()
-            for param in inception.parameters():
-                param.requires_grad = False
-            self.models['inception'] = {
-                'model': inception,
-                'layer': 'Mixed_5d',  # Middle layer
-                'weight': 0.7
-            }
         
         # Image preprocessing transforms
         self.transform = transforms.Compose([
@@ -102,7 +63,39 @@ class ImageProtector:
             transforms.ToPILImage()
         ])
         
-        print(f"Loaded {len(self.models)} model(s) for ensemble attack\n")
+        print("ImageProtector initialized (Models will load on demand)\n")
+
+    def ensure_model_loaded(self, model_name: str):
+        """Lazy load a specific model if it's not already in memory."""
+        if model_name in self.models:
+            return
+
+        print(f"Lazy loading {model_name}...")
+        
+        if model_name == 'vgg19':
+            model = models.vgg19(pretrained=True).to(self.device)
+            layer = 21 # conv4_1
+            weight = 1.0
+        elif model_name == 'resnet50':
+            model = models.resnet50(pretrained=True).to(self.device)
+            layer = 'layer3'
+            weight = 0.8
+        elif model_name == 'inception':
+            model = models.inception_v3(pretrained=True, transform_input=False).to(self.device)
+            layer = 'Mixed_5d'
+            weight = 0.7
+        else:
+            raise ValueError(f"Unknown model: {model_name}")
+
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad = False
+            
+        self.models[model_name] = {
+            'model': model,
+            'layer': layer,
+            'weight': weight
+        }
     
     def load_image(self, image_path: str) -> torch.Tensor:
         """
@@ -160,6 +153,9 @@ class ImageProtector:
         Returns:
             Feature maps from the specified layer.
         """
+        if model_name not in self.models:
+            self.ensure_model_loaded(model_name)
+            
         model_info = self.models[model_name]
         model = model_info['model']
         layer_spec = model_info['layer']
@@ -224,18 +220,20 @@ class ImageProtector:
         
         return features
     
-    def extract_all_features(self, image_tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def extract_all_features(self, image_tensor: torch.Tensor, target_models: List[str]) -> Dict[str, torch.Tensor]:
         """
-        Extract features from all models in the ensemble.
+        Extract features from specified models.
         
         Args:
             image_tensor: Preprocessed image tensor.
+            target_models: List of model names to extract features from.
             
         Returns:
             Dictionary mapping model names to their feature maps.
         """
         all_features = {}
-        for model_name in self.models.keys():
+        for model_name in target_models:
+            self.ensure_model_loaded(model_name)  # Ensure loaded before usage
             try:
                 features = self.extract_features(image_tensor, model_name)
                 if features is not None:
@@ -411,6 +409,7 @@ class ImageProtector:
                      num_iterations: int = 150,
                      learning_rate: float = 0.01,
                      epsilon: float = 0.03,
+                     target_models: List[str] = ['vgg19', 'resnet50'],
                      use_adaptive_epsilon: bool = True,
                      robust_to_transforms: bool = True,
                      feature_weight: float = 1.0,
@@ -425,6 +424,7 @@ class ImageProtector:
             num_iterations: Number of optimization iterations.
             learning_rate: Learning rate for gradient descent.
             epsilon: Maximum perturbation allowed (L-infinity bound).
+            target_models: List of models to attack (e.g. ['vgg19']).
             use_adaptive_epsilon: If True, adjust epsilon based on image characteristics.
             robust_to_transforms: If True, apply random transformations during training.
             feature_weight: Weight for feature distance term.
@@ -437,6 +437,7 @@ class ImageProtector:
         print(f"\n=== Starting Robust Image Protection ===")
         print(f"Input: {input_path}")
         print(f"Output: {output_path}")
+        print(f"Target Models: {target_models}")
         print(f"Iterations: {num_iterations}, Learning Rate: {learning_rate}, Base Epsilon: {epsilon}")
         print(f"Adaptive Epsilon: {use_adaptive_epsilon}, Robust to Transforms: {robust_to_transforms}\n")
         
@@ -451,9 +452,9 @@ class ImageProtector:
             print(f"Adaptive epsilon: {adaptive_eps:.4f} (base: {epsilon:.4f})")
             epsilon = adaptive_eps
         
-        # === STEP 3: Extract features from all models ===
-        print("Extracting original features from ensemble models...")
-        original_features_dict = self.extract_all_features(original_image)
+        # === STEP 3: Extract features from target models ===
+        print(f"Extracting original features from {len(target_models)} models...")
+        original_features_dict = self.extract_all_features(original_image, target_models)
         for model_name, features in original_features_dict.items():
             if features is not None:
                 print(f"  {model_name}: {features.shape}")
@@ -489,7 +490,7 @@ class ImageProtector:
             perturbed_image = original_image + delta
             
             # --- 6d: Extract features from perturbed image (all models) ---
-            perturbed_features_dict = self.extract_all_features(perturbed_image_transformed)
+            perturbed_features_dict = self.extract_all_features(perturbed_image_transformed, target_models)
             
             # --- 6e: Compute robust loss function ---
             loss = self.compute_loss(
@@ -552,7 +553,7 @@ class ImageProtector:
         
         # === STEP 7: Final evaluation ===
         final_perturbed = original_image + delta
-        final_features_dict = self.extract_all_features(final_perturbed)
+        final_features_dict = self.extract_all_features(final_perturbed, target_models)
         
         # Compute final metrics
         metrics = {}

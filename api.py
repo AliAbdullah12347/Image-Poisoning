@@ -58,8 +58,8 @@ async def lifespan(app: FastAPI):
     # Startup: Load models
     logger.info("Loading ImageProtector models...")
     try:
-        # Initialize with ensemble for robust protection
-        protector = ImageProtector(use_ensemble=True)
+        # Initialize with lazy loading (models load on demand)
+        protector = ImageProtector()
         logger.info("ImageProtector loaded successfully!")
     except Exception as e:
         logger.error(f"Failed to load ImageProtector: {e}")
@@ -152,6 +152,7 @@ def process_image_sync(image_bytes: bytes,
                        epsilon: float = 0.03,
                        use_adaptive_epsilon: bool = True,
                        robust_to_transforms: bool = True,
+                       target_models: list = None,
                        request_id: str = None) -> Tuple[bytes, dict]:
     """
     Synchronous image processing function.
@@ -164,6 +165,7 @@ def process_image_sync(image_bytes: bytes,
         epsilon: Maximum perturbation allowed
         use_adaptive_epsilon: Whether to use adaptive epsilon
         robust_to_transforms: Whether to make attack robust to transformations
+        target_models: List of models to target
         request_id: Unique request identifier for logging
         
     Returns:
@@ -222,6 +224,7 @@ def process_image_sync(image_bytes: bytes,
                 num_iterations=num_iterations,
                 learning_rate=learning_rate,
                 epsilon=epsilon,
+                target_models=target_models if target_models else ['vgg19', 'resnet50'],
                 use_adaptive_epsilon=use_adaptive_epsilon,
                 robust_to_transforms=robust_to_transforms,
                 feature_weight=1.0,
@@ -303,9 +306,12 @@ async def health_check():
 
 
 @app.post("/cloak", response_class=StreamingResponse)
+@app.post("/cloak", response_class=StreamingResponse)
 async def cloak_image(
     file: UploadFile = File(..., description="Image file to protect"),
-    num_iterations: int = Query(150, ge=MIN_ITERATIONS, le=MAX_ITERATIONS, description="Number of optimization iterations"),
+    mode: str = Query("balanced", description="Protection mode: 'speed', 'balanced', 'fortress', 'custom'"),
+    models: Optional[str] = Query(None, description="Comma-separated list of models (overrides mode if provided)"),
+    num_iterations: int = Query(None, ge=MIN_ITERATIONS, le=MAX_ITERATIONS, description="Number of optimization iterations (overrides mode)"),
     learning_rate: float = Query(0.01, ge=0.0001, le=1.0, description="Learning rate for optimization"),
     epsilon: float = Query(0.03, ge=0.001, le=0.1, description="Maximum perturbation per pixel"),
     use_adaptive_epsilon: bool = Query(True, description="Adjust epsilon based on image characteristics"),
@@ -315,20 +321,69 @@ async def cloak_image(
     """
     Protect an image from AI-based feature extraction.
     
-    This endpoint accepts an image file and returns a protected version
-    that looks identical to humans but confuses AI feature extractors.
-    
-    Args:
-        file: Image file to protect (JPEG, PNG, etc.)
-        num_iterations: Number of optimization iterations (default: 150)
-        learning_rate: Learning rate for optimization (default: 0.01)
-        epsilon: Maximum perturbation per pixel (default: 0.03)
-        use_adaptive_epsilon: Adjust epsilon based on image (default: True)
-        robust_to_transforms: Make attack robust to JPEG/resize (default: True)
-        
-    Returns:
-        Protected image as JPEG stream
+    Modes:
+    - **speed**: Fast protection (50 iterations, ResNet50 only, no transform robustness) ~15s
+    - **balanced**: Standard protection (100 iterations, VGG19+ResNet50, mild robustness) ~45s
+    - **fortress**: Maximum security (150 iterations, All models, full robustness) ~90s
+    - **custom**: Manual configuration via other parameters
     """
+    # 1. Configuration Mapping
+    # Default settings for each mode
+    mode_settings = {
+        "speed": {
+            "iterations": 50,
+            "models": ["resnet50"],
+            "robust": False
+        },
+        "balanced": {
+            "iterations": 100,
+            "models": ["vgg19", "resnet50"],
+            "robust": True
+        },
+        "fortress": {
+            "iterations": 150,
+            "models": ["vgg19", "resnet50", "inception"],
+            "robust": True
+        }
+    }
+    
+    # Defaults (fallback for custom or unknown)
+    final_iterations = 100
+    final_models = ["vgg19", "resnet50"]
+    final_robust = True
+    
+    # Apply mode settings
+    if mode in mode_settings:
+        settings = mode_settings[mode]
+        final_iterations = settings["iterations"]
+        final_models = settings["models"]
+        final_robust = settings["robust"]
+    
+    # Overrides (User can override specific parameters)
+    if num_iterations is not None:
+        final_iterations = num_iterations
+        
+    if models is not None:
+        # Parse comma-separated string "vgg19,resnet50" -> ["vgg19", "resnet50"]
+        final_models = [m.strip().lower() for m in models.split(",") if m.strip()]
+        
+    # Check robust override (explicitly passed as query param, but default is True, so we must be careful)
+    # Logic: If user specifically requested 'speed' mode, default robust is False. 
+    # But Query param has default True. We trust the mode map unless we detect explicit intent?
+    # This is tricky with FastAPI defaults. Let's say:
+    # If mode is 'speed', we force robust=False UNLESS the user likely didn't touch it.
+    # Actually, simplistic approach: Mode sets usage defaults, but explicit params take precedence?
+    # Since we can't easily detect "user didn't send param" vs "user sent default", 
+    # we will rely on text logic: if mode is speed, we disable robustness.
+    # Users who want custom need to use mode='custom' or just accept that mode sets the baseline.
+    if mode == "speed":
+        robust_to_transforms = False # Force disable for speed unless strictly customized (which is hard here)
+    elif mode == "custom":
+        final_iterations = num_iterations or 150 # Default for custom if not specified
+    
+    # ensure final_models is valid
+    if not final_models:
+        final_models = ["vgg19"] # Fallback logic
     # Check if protector is loaded
     if protector is None:
         raise HTTPException(
@@ -390,11 +445,12 @@ async def cloak_image(
                 None,  # Use default thread pool
                 process_image_sync,
                 image_bytes,
-                num_iterations,
+                final_iterations, # Use computed iterations
                 learning_rate,
                 epsilon,
                 use_adaptive_epsilon,
                 robust_to_transforms,
+                final_models, # Pass list of models
                 request_id
             ),
             timeout=DEFAULT_TIMEOUT
