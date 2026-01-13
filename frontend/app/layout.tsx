@@ -1,5 +1,8 @@
 import type { Metadata } from 'next'
+import { Inter } from 'next/font/google'
 import './globals.css'
+
+const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'Image Protection - AI Feature Extraction Protection',
@@ -13,7 +16,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className={`${inter.className} bg-background text-foreground antialiased selection:bg-primary selection:text-black`}>
+        {children}
+      </body>
     </html>
   )
 }

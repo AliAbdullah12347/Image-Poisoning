@@ -4,7 +4,7 @@ import { useState } from 'react'
 import ImageDropzone from '@/components/ImageDropzone'
 import LoadingAnimation from '@/components/LoadingAnimation'
 import ComparisonSlider from '@/components/ComparisonSlider'
-import { Shield, Download, RefreshCw, AlertCircle } from 'lucide-react'
+import { Shield, Download, RefreshCw, AlertCircle, Zap, Lock, Eye, Layers } from 'lucide-react'
 import axios from 'axios'
 
 type ProcessingState = 'idle' | 'processing' | 'success' | 'error'
@@ -23,7 +23,7 @@ export default function Home() {
     setError(null)
     setProtectedImageUrl(null)
     setMetrics(null)
-    
+
     if (file) {
       const url = URL.createObjectURL(file)
       setOriginalImageUrl(url)
@@ -55,17 +55,12 @@ export default function Home() {
       const response = await axios.post('/api/upload', formData, {
         responseType: 'blob',
         timeout: 300000, // 5 minutes
-        onUploadProgress: (progressEvent) => {
-          // Could show upload progress here
-        },
       })
 
-      // Create blob URL for protected image
       const blob = new Blob([response.data], { type: 'image/jpeg' })
       const url = URL.createObjectURL(blob)
       setProtectedImageUrl(url)
 
-      // Get metrics from headers if available
       const requestId = response.headers['x-request-id']
       const processingTime = response.headers['x-processing-time']
       const featureDistance = response.headers['x-feature-distance']
@@ -103,7 +98,7 @@ export default function Home() {
 
   const handleDownload = () => {
     if (!protectedImageUrl) return
-    
+
     const link = document.createElement('a')
     link.href = protectedImageUrl
     link.download = `protected_${selectedFile?.name || 'image.jpg'}`
@@ -113,226 +108,219 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <div className="flex items-center justify-center space-x-3 mb-4">
-            <Shield className="w-10 h-10 text-blue-600 dark:text-blue-400" />
-            <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100">
-              Image Protection
-            </h1>
+    <main className="min-h-screen bg-background relative overflow-hidden">
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-grid-pattern bg-[length:30px_30px] opacity-[0.03] pointer-events-none" />
+
+      {/* Ambient Glow */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-primary/20 blur-[120px] rounded-full pointer-events-none opacity-20" />
+
+      <div className="container mx-auto px-6 py-20 relative z-10 max-w-7xl">
+
+        {/* Hero Section */}
+        <div className="text-center mb-20 space-y-6">
+          <div className="inline-flex items-center space-x-2 px-4 py-2 rounded-full border border-primary/20 bg-primary/5 backdrop-blur-sm">
+            <Shield className="w-4 h-4 text-primary" />
+            <span className="text-sm font-medium text-primary tracking-wide uppercase">Advanced Adversarial Protection</span>
           </div>
-          <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
-            Protect your images from AI-based feature extraction using advanced adversarial attacks.
-            Your images will look identical to humans but confuse AI models.
+
+          <h1 className="text-6xl md:text-7xl font-bold tracking-tight text-white">
+            Protect Your Art <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-accent relative">
+              From AI Scraping
+              <span className="absolute -inset-1 blur-xl bg-primary/20 -z-10" />
+            </span>
+          </h1>
+
+          <p className="text-xl text-gray-400 max-w-2xl mx-auto leading-relaxed">
+            Our ensemble adversarial attack engine invisibly poisons your images, confusing AI feature extractors while remaining visually identical to the human eye.
           </p>
         </div>
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column - Upload */}
-          <div className="space-y-6">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-              <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
-                Upload Image
-              </h2>
-              <ImageDropzone
-                onFileSelect={handleFileSelect}
-                selectedFile={selectedFile}
-                disabled={state === 'processing'}
-              />
-              
-              {selectedFile && state === 'idle' && (
-                <button
-                  onClick={handleProtect}
-                  className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2"
-                >
-                  <Shield className="w-5 h-5" />
-                  <span>Protect Image</span>
-                </button>
-              )}
+        {/* Application Interface */}
+        <div className="glass rounded-3xl p-1 shadow-2xl overflow-hidden border border-white/10 ring-1 ring-white/5">
+          <div className="bg-black/40 backdrop-blur-xl rounded-[20px] p-8 md:p-12 min-h-[600px]">
 
-              {state === 'processing' && (
-                <div className="mt-6">
-                  <LoadingAnimation />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20">
+              {/* Left Panel: Upload & Config */}
+              <div className="space-y-8 flex flex-col justify-center">
+                <div>
+                  <h2 className="text-3xl font-bold text-white mb-2 flex items-center">
+                    <Layers className="w-6 h-6 text-secondary mr-3" />
+                    Input Source
+                  </h2>
+                  <p className="text-gray-400">Upload high-resolution artwork for protection.</p>
                 </div>
-              )}
 
-              {state === 'error' && (
-                <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                  <div className="flex items-start space-x-3">
-                    <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5" />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                        Error
-                      </p>
-                      <p className="text-sm text-red-600 dark:text-red-400 mt-1">
-                        {error}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleReset}
-                    className="mt-4 w-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-medium py-2 px-4 rounded-lg transition-colors"
-                  >
-                    Try Again
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Metrics */}
-            {metrics && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
-                  Protection Metrics
-                </h3>
-                <div className="space-y-3">
-                  {metrics.processingTime && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        Processing Time
-                      </span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {metrics.processingTime.toFixed(2)}s
-                      </span>
-                    </div>
-                  )}
-                  {metrics.featureDistance && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        Feature Distance
-                      </span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {metrics.featureDistance.toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-                  {metrics.requestId && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        Request ID
-                      </span>
-                      <span className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                        {metrics.requestId}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Right Column - Results */}
-          <div className="space-y-6">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-                  Comparison
-                </h2>
-                {state === 'success' && (
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={handleDownload}
-                      className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
-                      title="Download protected image"
-                    >
-                      <Download className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={handleReset}
-                      className="p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg transition-colors"
-                      title="Start over"
-                    >
-                      <RefreshCw className="w-5 h-5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {state === 'idle' && !originalImageUrl && (
-                <div className="flex items-center justify-center h-64 bg-gray-100 dark:bg-gray-700 rounded-lg">
-                  <p className="text-gray-500 dark:text-gray-400">
-                    Upload an image to see the comparison
-                  </p>
-                </div>
-              )}
-
-              {state === 'idle' && originalImageUrl && !protectedImageUrl && (
-                <div className="space-y-4">
-                  <div className="relative aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
-                    <img
-                      src={originalImageUrl}
-                      alt="Original"
-                      className="w-full h-full object-contain"
+                <div className="relative group">
+                  <div className="absolute -inset-1 bg-gradient-to-r from-secondary to-primary rounded-xl blur opacity-10 group-hover:opacity-30 transition duration-500" />
+                  <div className="relative bg-surface rounded-xl border border-white/5 p-1">
+                    <ImageDropzone
+                      onFileSelect={handleFileSelect}
+                      selectedFile={selectedFile}
+                      disabled={state === 'processing'}
                     />
                   </div>
-                  <p className="text-sm text-center text-gray-500 dark:text-gray-400">
-                    Click "Protect Image" to see the comparison
-                  </p>
                 </div>
-              )}
 
-              {state === 'processing' && originalImageUrl && (
-                <div className="relative aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
-                  <img
-                    src={originalImageUrl}
-                    alt="Original"
-                    className="w-full h-full object-contain opacity-50"
-                  />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-lg">
+                {/* Actions */}
+                <div className="space-y-4 pt-4">
+                  {selectedFile && state === 'idle' && (
+                    <button
+                      onClick={handleProtect}
+                      className="w-full group relative overflow-hidden rounded-xl bg-primary px-8 py-4 transition-all hover:scale-[1.02] hover:shadow-[0_0_40px_-10px_rgba(255,255,0,0.5)]"
+                    >
+                      <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                      <div className="relative flex items-center justify-center space-x-3 text-black font-bold text-lg">
+                        <Zap className="w-5 h-5 fill-black" />
+                        <span>Initiate Protection Sequence</span>
+                      </div>
+                    </button>
+                  )}
+
+                  {state === 'processing' && (
+                    <div className="w-full bg-surface/50 border border-white/5 rounded-xl p-6 flex flex-col items-center justify-center space-y-4">
                       <LoadingAnimation />
+                      <p className="text-primary font-mono text-sm animate-pulse">OPTIMIZING NOISE VECTORS...</p>
                     </div>
-                  </div>
-                </div>
-              )}
+                  )}
 
-              {state === 'success' && originalImageUrl && protectedImageUrl && (
-                <ComparisonSlider
-                  originalImage={originalImageUrl}
-                  protectedImage={protectedImageUrl}
-                />
-              )}
-
-              {state === 'error' && originalImageUrl && (
-                <div className="relative aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
-                  <img
-                    src={originalImageUrl}
-                    alt="Original"
-                    className="w-full h-full object-contain opacity-50"
-                  />
+                  {state === 'error' && (
+                    <div className="w-full bg-red-500/10 border border-red-500/20 rounded-xl p-6 flex items-start space-x-4">
+                      <AlertCircle className="w-6 h-6 text-red-500 shrink-0" />
+                      <div className="flex-1">
+                        <h4 className="text-red-500 font-bold mb-1">Protection Failed</h4>
+                        <p className="text-red-400/80 text-sm mb-4">{error}</p>
+                        <button
+                          onClick={handleReset}
+                          className="text-white bg-red-500/20 hover:bg-red-500/30 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                        >
+                          Try Again
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+
+              {/* Right Panel: Visualization & Results */}
+              <div className="bg-surface/30 rounded-2xl border border-white/5 p-1 flex flex-col relative overflow-hidden">
+                {/* Decorative header */}
+                <div className="absolute top-0 left-0 right-0 h-10 bg-white/5 border-b border-white/5 flex items-center px-4 space-x-2">
+                  <div className="w-3 h-3 rounded-full bg-red-500/20 border border-red-500/50" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/20 border border-yellow-500/50" />
+                  <div className="w-3 h-3 rounded-full bg-green-500/20 border border-green-500/50" />
+                  <div className="flex-1" />
+                  <div className="text-[10px] font-mono text-gray-500">VIEWPORT: PREVIEW</div>
+                </div>
+
+                <div className="flex-1 mt-10 p-4 flex items-center justify-center min-h-[400px]">
+                  {state === 'idle' && !selectedFile && (
+                    <div className="text-center space-y-4 opacity-50">
+                      <div className="w-20 h-20 mx-auto rounded-full bg-white/5 flex items-center justify-center border border-white/10">
+                        <Eye className="w-8 h-8 text-gray-400" />
+                      </div>
+                      <p className="text-gray-500 font-mono text-sm max-w-[200px] mx-auto">
+                        WAITING FOR SIGNAL SOURCE...
+                      </p>
+                    </div>
+                  )}
+
+                  {state === 'idle' && originalImageUrl && !protectedImageUrl && (
+                    <div className="relative w-full h-full rounded-lg overflow-hidden border border-white/10 group">
+                      <img src={originalImageUrl} alt="Original" className="w-full h-full object-contain" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-6">
+                        <div className="text-white">
+                          <p className="font-bold">Original Asset</p>
+                          <p className="text-xs text-gray-400 font-mono uppercase">Unprotected</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {state === 'success' && originalImageUrl && protectedImageUrl && (
+                    <div className="w-full h-full">
+                      <ComparisonSlider
+                        originalImage={originalImageUrl}
+                        protectedImage={protectedImageUrl}
+                      />
+
+                      <div className="mt-6 flex items-center justify-between">
+                        {metrics && (
+                          <div className="flex items-center space-x-4">
+                            <div className="text-xs font-mono text-gray-400 space-y-1">
+                              <div className="flex items-center space-x-2">
+                                <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                                <span>STATUS: SECURE</span>
+                              </div>
+                              <div className="text-white/50">TIME: {metrics.processingTime?.toFixed(2)}s</div>
+                              <div className="text-white/50">DELTA: {metrics.featureDistance?.toFixed(2)}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex space-x-3">
+                          <button
+                            onClick={handleReset}
+                            className="p-3 rounded-xl bg-white/5 hover:bg-white/10 text-white transition-colors border border-white/5"
+                            title="Reset"
+                          >
+                            <RefreshCw className="w-5 h-5" />
+                          </button>
+                          <button
+                            onClick={handleDownload}
+                            className="px-6 py-3 rounded-xl bg-accent text-black font-bold hover:bg-green-400 transition-all flex items-center space-x-2 shadow-[0_0_20px_-5px_rgba(34,197,94,0.4)]"
+                          >
+                            <Download className="w-5 h-5" />
+                            <span>Download Asset</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Info Box */}
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-6">
-              <h3 className="text-lg font-semibold text-blue-900 dark:text-blue-100 mb-2">
-                How It Works
-              </h3>
-              <ul className="space-y-2 text-sm text-blue-800 dark:text-blue-200">
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>Upload your image and click "Protect Image"</span>
-                </li>
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>Processing takes 30-120 seconds</span>
-                </li>
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>Protected image looks identical to humans</span>
-                </li>
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>AI models see completely different features</span>
-                </li>
-              </ul>
-            </div>
           </div>
         </div>
+
+        {/* How it works Section */}
+        <div className="mt-32 mb-20">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl font-bold text-white mb-4">Core Architecture</h2>
+            <p className="text-gray-400">Understanding the protection mechanism</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {[
+              {
+                icon: Layers,
+                title: "Feature Extraction",
+                desc: "We analyze your image using VGG19, ResNet50, and Inception models to map how AI perceives the content."
+              },
+              {
+                icon: Zap,
+                title: "Adversarial Noise",
+                desc: "An undetectable noise vector is generated and injected into the image, targeting specific neural activations."
+              },
+              {
+                icon: Lock,
+                title: "Visual Lock",
+                desc: "Perceptual loss functions ensure the image remains visually 99.9% identical to the original artwork."
+              }
+            ].map((item, i) => (
+              <div key={i} className="glass p-8 rounded-2xl border border-white/5 hover:border-primary/20 transition-all group">
+                <div className="w-14 h-14 rounded-full bg-surface border border-white/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                  <item.icon className="w-7 h-7 text-primary" />
+                </div>
+                <h3 className="text-xl font-bold text-white mb-3">{item.title}</h3>
+                <p className="text-gray-400 leading-relaxed text-sm">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
       </div>
     </main>
   )
