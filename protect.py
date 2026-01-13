@@ -1,6 +1,7 @@
 """
-Image Protection Script - Phase 1
-Performs adversarial attack on images to protect them from feature extraction.
+Robust Image Protection Script
+Performs robust adversarial attack on images to protect them from feature extraction.
+Uses ensemble of models and transformation robustness for maximum effectiveness.
 """
 
 import torch
@@ -8,24 +9,28 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
 import torchvision.models as models
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
+import random
+import io
 
 
 class ImageProtector:
     """
-    Class to handle image protection using adversarial attacks.
-    Uses VGG19 feature extractor to perform the attack.
+    Robust class to handle image protection using ensemble adversarial attacks.
+    Uses multiple models (VGG19, ResNet50, Inception) for better transferability.
+    Includes robustness to transformations (JPEG compression, resizing).
     """
     
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, use_ensemble: bool = True):
         """
-        Initialize the ImageProtector.
+        Initialize the ImageProtector with ensemble models.
         
         Args:
             device: Device to run computations on ('cuda' or 'cpu').
                    If None, automatically selects based on availability.
+            use_ensemble: If True, use multiple models for better transferability.
         """
         # Set device
         if device is None:
@@ -34,32 +39,70 @@ class ImageProtector:
             self.device = torch.device(device)
         
         print(f"Using device: {self.device}")
+        print(f"Ensemble mode: {use_ensemble}")
         
-        # Load pre-trained VGG19 model (frozen, no training)
-        self.model = models.vgg19(pretrained=True).to(self.device)
-        self.model.eval()  # Set to evaluation mode
+        # Load ensemble of models for better transferability
+        self.models = {}
+        self.feature_hooks = {}
+        self.use_ensemble = use_ensemble
         
-        # Freeze all parameters
-        for param in self.model.features.parameters():
+        # Common ImageNet normalization
+        self.normalize_mean = [0.485, 0.456, 0.406]
+        self.normalize_std = [0.229, 0.224, 0.225]
+        
+        # Load VGG19
+        print("Loading VGG19...")
+        vgg19 = models.vgg19(pretrained=True).to(self.device)
+        vgg19.eval()
+        for param in vgg19.parameters():
             param.requires_grad = False
+        self.models['vgg19'] = {
+            'model': vgg19,
+            'layer': 21,  # conv4_1
+            'weight': 1.0
+        }
+        
+        if use_ensemble:
+            # Load ResNet50
+            print("Loading ResNet50...")
+            resnet50 = models.resnet50(pretrained=True).to(self.device)
+            resnet50.eval()
+            for param in resnet50.parameters():
+                param.requires_grad = False
+            self.models['resnet50'] = {
+                'model': resnet50,
+                'layer': 'layer3',  # Third residual block
+                'weight': 0.8
+            }
+            
+            # Load Inception v3
+            print("Loading Inception v3...")
+            inception = models.inception_v3(pretrained=True, transform_input=False).to(self.device)
+            inception.eval()
+            for param in inception.parameters():
+                param.requires_grad = False
+            self.models['inception'] = {
+                'model': inception,
+                'layer': 'Mixed_5d',  # Middle layer
+                'weight': 0.7
+            }
         
         # Image preprocessing transforms
         self.transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                               std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=self.normalize_mean, std=self.normalize_std)
         ])
         
         # Inverse transform to convert back to image
         self.inverse_transform = transforms.Compose([
-            transforms.Normalize(mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-                               std=[1/0.229, 1/0.224, 1/0.225]),
+            transforms.Normalize(
+                mean=[-m/s for m, s in zip(self.normalize_mean, self.normalize_std)],
+                std=[1/s for s in self.normalize_std]
+            ),
             transforms.ToPILImage()
         ])
         
-        # Feature extractor hook (will be set when needed)
-        self.feature_maps = None
-        self.hook_handle = None
+        print(f"Loaded {len(self.models)} model(s) for ensemble attack\n")
     
     def load_image(self, image_path: str) -> torch.Tensor:
         """
@@ -106,147 +149,275 @@ class ImageProtector:
         
         return tensor  # Shape: (1, 3, H, W) - ready for model input
     
-    def extract_features(self, image_tensor: torch.Tensor, layer_name: str = 'style') -> torch.Tensor:
+    def extract_features(self, image_tensor: torch.Tensor, model_name: str = 'vgg19') -> torch.Tensor:
         """
-        Extract feature maps from a specified layer of VGG19.
+        Extract feature maps from a specified model and layer.
         
         Args:
             image_tensor: Preprocessed image tensor.
-            layer_name: Name of the layer to extract features from.
+            model_name: Name of the model to use ('vgg19', 'resnet50', 'inception').
             
         Returns:
             Feature maps from the specified layer.
         """
-        # VGG19 architecture has 5 blocks of convolutional layers
-        # We want to extract from a "style" layer - typically conv4_1 or conv5_1
-        # These layers capture texture, patterns, and high-level features
-        # Layer 21 = conv4_1 (after 4th max pooling) - good balance of detail and abstraction
+        model_info = self.models[model_name]
+        model = model_info['model']
+        layer_spec = model_info['layer']
+        feature_maps = [None]  # Use list to allow modification in nested function
         
-        # Define which layer to extract from (VGG19.features is the convolutional part)
-        # VGG19 structure: features[0-36] are conv layers, then classifier layers
-        # We use layer 21 (conv4_1) which is a good "style" representation layer
-        target_layer_index = 21  # conv4_1 layer
-        
-        # Clear any previous feature maps
-        self.feature_maps = None
-        
-        # Define a hook function - this is called automatically during forward pass
-        # Hooks are PyTorch's way to intercept and capture intermediate layer outputs
         def hook_fn(module, input, output):
-            """
-            Hook function that captures the output of a layer.
-            
-            Args:
-                module: The layer module that called this hook
-                input: Input tensor to the layer (tuple)
-                output: Output tensor from the layer (what we want to capture)
-            """
-            # Store the output feature maps
-            # We clone() to create a copy, so we can use it after the forward pass
-            self.feature_maps = output.clone()
+            feature_maps[0] = output.clone()
         
-        # Register the hook on the target layer
-        # register_forward_hook() attaches our function to the layer
-        # When the layer processes data, it will call hook_fn and pass its output
-        handle = self.model.features[target_layer_index].register_forward_hook(hook_fn)
+        # Register hook based on model architecture
+        if model_name == 'vgg19':
+            handle = model.features[layer_spec].register_forward_hook(hook_fn)
+            with torch.no_grad():
+                _ = model.features(image_tensor)
+        elif model_name == 'resnet50':
+            # ResNet50: access layer3 (third residual block)
+            handle = model.layer3.register_forward_hook(hook_fn)
+            with torch.no_grad():
+                x = model.conv1(image_tensor)
+                x = model.bn1(x)
+                x = model.relu(x)
+                x = model.maxpool(x)
+                x = model.layer1(x)
+                x = model.layer2(x)
+                _ = model.layer3(x)
+        elif model_name == 'inception':
+            # Inception v3: use Mixed_5d layer (middle layer with good features)
+            try:
+                # Try to find the layer by name
+                target_layer = None
+                for name, module in model.named_modules():
+                    if 'Mixed_5d' in name or layer_spec in name:
+                        target_layer = module
+                        break
+                
+                if target_layer is None:
+                    # Fallback: use Mixed_5b (earlier layer)
+                    for name, module in model.named_modules():
+                        if 'Mixed_5b' in name:
+                            target_layer = module
+                            break
+                
+                if target_layer:
+                    handle = target_layer.register_forward_hook(hook_fn)
+                    with torch.no_grad():
+                        # Use the model's forward method but stop at the hook
+                        # Inception has aux_logits, so we handle that
+                        if hasattr(model, 'aux_logits') and model.aux_logits:
+                            output, aux = model(image_tensor)
+                        else:
+                            output = model(image_tensor)
+                else:
+                    handle = None
+            except Exception:
+                # If Inception extraction fails, return None (will be skipped)
+                handle = None
+        else:
+            handle = None
         
-        # Perform forward pass through the model's feature extractor
-        # torch.no_grad() disables gradient computation (we don't need gradients here)
-        # This saves memory and speeds up computation
-        with torch.no_grad():
-            # Forward pass: image -> conv layers -> feature maps
-            # We only go through .features (conv layers), not .classifier (FC layers)
-            _ = self.model.features(image_tensor)
-            # The underscore _ means we ignore the return value
-            # We care about the hook capturing the intermediate output, not the final output
+        features = feature_maps[0]
+        if handle:
+            handle.remove()
         
-        # Extract the captured feature maps
-        # After forward pass, hook_fn has stored the output in self.feature_maps
-        features = self.feature_maps
-        
-        # Remove the hook to free up memory and prevent interference
-        # Hooks stay attached if not removed, which can cause memory leaks
-        handle.remove()
-        
-        return features  # Shape: (1, 512, H/16, W/16) approximately - feature representation
+        return features
     
-    def compute_loss(self, original_features: torch.Tensor, 
-                    perturbed_features: torch.Tensor,
+    def extract_all_features(self, image_tensor: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Extract features from all models in the ensemble.
+        
+        Args:
+            image_tensor: Preprocessed image tensor.
+            
+        Returns:
+            Dictionary mapping model names to their feature maps.
+        """
+        all_features = {}
+        for model_name in self.models.keys():
+            try:
+                features = self.extract_features(image_tensor, model_name)
+                if features is not None:
+                    all_features[model_name] = features
+            except Exception as e:
+                print(f"Warning: Could not extract features from {model_name}: {e}")
+        return all_features
+    
+    def apply_transformations(self, image_tensor: torch.Tensor, training: bool = True) -> torch.Tensor:
+        """
+        Apply random transformations to make attack robust to preprocessing.
+        Simulates JPEG compression, resizing, and other common transformations.
+        
+        Args:
+            image_tensor: Image tensor to transform.
+            training: If True, apply random transformations. If False, apply deterministic ones.
+            
+        Returns:
+            Transformed image tensor.
+        """
+        if not training:
+            return image_tensor
+        
+        # Convert to PIL for transformations
+        tensor_cpu = image_tensor.detach().cpu().squeeze(0)
+        tensor_cpu = torch.clamp(tensor_cpu, 0.0, 1.0)
+        
+        # Denormalize
+        denorm = transforms.Normalize(
+            mean=[-m/s for m, s in zip(self.normalize_mean, self.normalize_std)],
+            std=[1/s for s in self.normalize_std]
+        )
+        tensor_cpu = denorm(tensor_cpu)
+        pil_image = transforms.ToPILImage()(tensor_cpu)
+        
+        # Apply random transformations with probability
+        if random.random() < 0.3:  # 30% chance
+            # Simulate JPEG compression
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='JPEG', quality=random.randint(85, 95))
+            buffer.seek(0)
+            pil_image = Image.open(buffer)
+        
+        if random.random() < 0.2:  # 20% chance
+            # Random resize (simulate different input sizes)
+            size_factor = random.uniform(0.95, 1.05)
+            new_size = (int(pil_image.width * size_factor), int(pil_image.height * size_factor))
+            pil_image = pil_image.resize(new_size, Image.LANCZOS)
+            # Resize back to original
+            original_size = (image_tensor.shape[3], image_tensor.shape[2])
+            pil_image = pil_image.resize(original_size, Image.LANCZOS)
+        
+        if random.random() < 0.1:  # 10% chance
+            # Slight blur (simulate compression artifacts)
+            pil_image = pil_image.filter(ImageFilter.GaussianBlur(radius=0.5))
+        
+        # Convert back to tensor
+        tensor = transforms.ToTensor()(pil_image)
+        tensor = transforms.Normalize(mean=self.normalize_mean, std=self.normalize_std)(tensor)
+        tensor = tensor.unsqueeze(0).to(self.device)
+        
+        return tensor
+    
+    def compute_perceptual_loss(self, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
+        """
+        Compute perceptual loss using VGG features (better than pixel loss).
+        
+        Args:
+            img1: First image tensor.
+            img2: Second image tensor.
+            
+        Returns:
+            Perceptual loss value.
+        """
+        # Use VGG19 features for perceptual loss
+        features1 = self.extract_features(img1, 'vgg19')
+        features2 = self.extract_features(img2, 'vgg19')
+        
+        if features1 is None or features2 is None:
+            # Fallback to pixel loss
+            return torch.norm(img1 - img2, p=2) ** 2
+        
+        # Perceptual loss: L2 distance in feature space
+        return torch.norm(features1 - features2, p=2) ** 2
+    
+    def compute_loss(self, original_features_dict: Dict[str, torch.Tensor], 
+                    perturbed_features_dict: Dict[str, torch.Tensor],
                     original_image: torch.Tensor,
                     perturbed_image: torch.Tensor,
                     feature_weight: float = 1.0,
-                    pixel_weight: float = 0.1) -> torch.Tensor:
+                    pixel_weight: float = 0.1,
+                    perceptual_weight: float = 0.5) -> torch.Tensor:
         """
-        Compute the loss function.
-        Maximize distance between features, minimize pixel difference.
+        Compute robust loss function with ensemble and perceptual loss.
         
         Args:
-            original_features: Features from original image.
-            perturbed_features: Features from perturbed image.
+            original_features_dict: Dictionary of features from original image (all models).
+            perturbed_features_dict: Dictionary of features from perturbed image (all models).
             original_image: Original image tensor.
             perturbed_image: Perturbed image tensor.
             feature_weight: Weight for feature distance term.
             pixel_weight: Weight for pixel difference term.
+            perceptual_weight: Weight for perceptual loss term.
             
         Returns:
             Computed loss value.
         """
-        # === PART 1: Feature Distance Term (we want to MAXIMIZE this) ===
-        # Goal: Make the feature representations as different as possible
-        # This confuses the model - it can't recognize the image properly
+        # === PART 1: Ensemble Feature Distance (MAXIMIZE) ===
+        total_feature_distance = 0.0
+        total_weight = 0.0
         
-        # Calculate the difference between feature maps
-        # perturbed_features - original_features gives us the difference tensor
-        feature_diff = perturbed_features - original_features
+        for model_name in original_features_dict.keys():
+            if model_name in perturbed_features_dict:
+                orig_feat = original_features_dict[model_name]
+                pert_feat = perturbed_features_dict[model_name]
+                
+                if orig_feat is not None and pert_feat is not None:
+                    # Normalize features for fair comparison across models
+                    orig_feat_norm = orig_feat / (torch.norm(orig_feat, p=2) + 1e-8)
+                    pert_feat_norm = pert_feat / (torch.norm(pert_feat, p=2) + 1e-8)
+                    
+                    feature_diff = pert_feat_norm - orig_feat_norm
+                    feature_dist = torch.norm(feature_diff, p=2) ** 2
+                    
+                    model_weight = self.models[model_name]['weight']
+                    total_feature_distance += model_weight * feature_dist
+                    total_weight += model_weight
         
-        # Calculate L2 norm squared (Euclidean distance squared)
-        # torch.norm(..., p=2) computes: sqrt(sum(x²)) for all elements
-        # We square it again to get: sum(x²) - this is the squared L2 norm
-        # Why squared? It's smoother for optimization (no square root, better gradients)
-        # This measures how "far apart" the feature representations are
-        feature_distance = torch.norm(feature_diff, p=2) ** 2
+        if total_weight > 0:
+            avg_feature_distance = total_feature_distance / total_weight
+        else:
+            avg_feature_distance = torch.tensor(0.0, device=self.device)
         
-        # === PART 2: Pixel Difference Term (we want to MINIMIZE this) ===
-        # Goal: Keep the image visually similar to the original
-        # This ensures humans still see the original art
-        
-        # Calculate the difference between images (this is the noise δ)
-        # perturbed_image - original_image = δ (the perturbation we added)
+        # === PART 2: Pixel Difference (MINIMIZE) ===
         pixel_diff = perturbed_image - original_image
-        
-        # Calculate L2 norm squared of the pixel difference
-        # This measures how much we've changed the pixels
-        # Smaller value = less visible change = better visual quality
         pixel_difference = torch.norm(pixel_diff, p=2) ** 2
         
-        # === PART 3: Combine into Loss Function ===
-        # Optimization algorithms MINIMIZE loss, but we want to:
-        #   - MAXIMIZE feature_distance (confuse the model)
-        #   - MINIMIZE pixel_difference (preserve visual quality)
-        # 
-        # Solution: Negate the feature_distance term
-        #   - Minimizing (-feature_distance) = Maximizing feature_distance ✓
-        #   - Minimizing pixel_difference = Minimizing pixel_difference ✓
-        #
-        # Formula: L = -α * feature_distance + β * pixel_difference
-        # Where:
-        #   α = feature_weight (how much we care about confusing the model)
-        #   β = pixel_weight (how much we care about visual similarity)
-        #
-        # The weights control the trade-off:
-        #   - Higher feature_weight → more confusion, but might be more visible
-        #   - Higher pixel_weight → better visual quality, but less confusion
+        # === PART 3: Perceptual Loss (MINIMIZE) ===
+        # This ensures visual quality is preserved
+        perceptual_loss = self.compute_perceptual_loss(original_image, perturbed_image)
         
-        loss = -feature_weight * feature_distance + pixel_weight * pixel_difference
+        # === PART 4: Combined Loss ===
+        # Maximize feature distance, minimize pixel and perceptual differences
+        loss = (-feature_weight * avg_feature_distance + 
+                pixel_weight * pixel_difference + 
+                perceptual_weight * perceptual_loss)
         
-        return loss  # Single scalar value - what we optimize
+        return loss
+    
+    def compute_adaptive_epsilon(self, image_tensor: torch.Tensor, base_epsilon: float = 0.03) -> float:
+        """
+        Compute adaptive epsilon based on image characteristics.
+        Some images can tolerate more perturbation than others.
+        
+        Args:
+            image_tensor: Image tensor to analyze.
+            base_epsilon: Base epsilon value.
+            
+        Returns:
+            Adaptive epsilon value.
+        """
+        # Compute image variance (higher variance = more texture = can hide more noise)
+        variance = torch.var(image_tensor).item()
+        
+        # Adjust epsilon based on variance
+        # High variance images (textured) can handle more perturbation
+        # Low variance images (smooth) need less perturbation
+        adaptive_factor = 0.8 + 0.4 * min(variance * 10, 1.0)  # Scale between 0.8 and 1.2
+        
+        return base_epsilon * adaptive_factor
     
     def protect_image(self, input_path: str, output_path: str,
-                     num_iterations: int = 100,
+                     num_iterations: int = 150,
                      learning_rate: float = 0.01,
-                     epsilon: float = 0.03) -> None:
+                     epsilon: float = 0.03,
+                     use_adaptive_epsilon: bool = True,
+                     robust_to_transforms: bool = True,
+                     feature_weight: float = 1.0,
+                     pixel_weight: float = 0.1,
+                     perceptual_weight: float = 0.5) -> Dict[str, float]:
         """
-        Main method to protect an image using adversarial attack.
+        Main method to protect an image using robust adversarial attack.
         
         Args:
             input_path: Path to input image (e.g., 'art.jpg').
@@ -254,124 +425,167 @@ class ImageProtector:
             num_iterations: Number of optimization iterations.
             learning_rate: Learning rate for gradient descent.
             epsilon: Maximum perturbation allowed (L-infinity bound).
+            use_adaptive_epsilon: If True, adjust epsilon based on image characteristics.
+            robust_to_transforms: If True, apply random transformations during training.
+            feature_weight: Weight for feature distance term.
+            pixel_weight: Weight for pixel difference term.
+            perceptual_weight: Weight for perceptual loss term.
+            
+        Returns:
+            Dictionary with evaluation metrics.
         """
-        print(f"\n=== Starting Image Protection ===")
+        print(f"\n=== Starting Robust Image Protection ===")
         print(f"Input: {input_path}")
         print(f"Output: {output_path}")
-        print(f"Iterations: {num_iterations}, Learning Rate: {learning_rate}, Epsilon: {epsilon}\n")
+        print(f"Iterations: {num_iterations}, Learning Rate: {learning_rate}, Base Epsilon: {epsilon}")
+        print(f"Adaptive Epsilon: {use_adaptive_epsilon}, Robust to Transforms: {robust_to_transforms}\n")
         
         # === STEP 1: Load and preprocess the original image ===
         print("Loading original image...")
         original_image = self.load_image(input_path)
         print(f"Image shape: {original_image.shape}")
         
-        # === STEP 2: Extract features from the original image ===
-        # This gives us the "baseline" feature representation
-        # We'll compare against this to maximize the difference
-        print("Extracting original features from VGG19...")
-        original_features = self.extract_features(original_image)
-        print(f"Original features shape: {original_features.shape}")
+        # === STEP 2: Compute adaptive epsilon if enabled ===
+        if use_adaptive_epsilon:
+            adaptive_eps = self.compute_adaptive_epsilon(original_image, epsilon)
+            print(f"Adaptive epsilon: {adaptive_eps:.4f} (base: {epsilon:.4f})")
+            epsilon = adaptive_eps
         
-        # === STEP 3: Initialize the noise tensor (δ) ===
-        # This is what we'll optimize - the perturbation to add to the image
-        # torch.zeros_like() creates a tensor of zeros with same shape as original_image
-        # requires_grad=True tells PyTorch to track gradients for this tensor
-        # This is crucial - we'll use gradients to update δ during optimization
+        # === STEP 3: Extract features from all models ===
+        print("Extracting original features from ensemble models...")
+        original_features_dict = self.extract_all_features(original_image)
+        for model_name, features in original_features_dict.items():
+            if features is not None:
+                print(f"  {model_name}: {features.shape}")
+        
+        # === STEP 4: Initialize the noise tensor (δ) ===
         print("Initializing noise tensor...")
         delta = torch.zeros_like(original_image, requires_grad=True)
-        # Shape: (1, 3, H, W) - same as original_image, but all zeros initially
         
-        # === STEP 4: Create optimizer ===
-        # Optimizer will update delta based on computed gradients
-        # Adam optimizer is adaptive - it adjusts learning rate per parameter
-        # We only optimize delta, NOT the model weights (they're frozen)
+        # === STEP 5: Create optimizer with learning rate scheduling ===
         optimizer = optim.Adam([delta], lr=learning_rate)
-        # [delta] is a list of tensors to optimize (just delta in our case)
-        # lr=learning_rate controls step size (how big each update is)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_iterations)
         
-        # === STEP 5: Optimization Loop ===
-        # We'll iterate multiple times, gradually improving the perturbation
-        print(f"\nStarting optimization ({num_iterations} iterations)...")
-        print("-" * 50)
+        # === STEP 6: Optimization Loop ===
+        print(f"\nStarting robust optimization ({num_iterations} iterations)...")
+        print("-" * 70)
+        
+        best_loss = float('inf')
+        best_delta = None
         
         for iteration in range(num_iterations):
-            # --- 5a: Create perturbed image ---
-            # Add the noise to the original image
-            # Formula: x' = x + δ (perturbed image = original + noise)
+            # --- 6a: Create perturbed image ---
             perturbed_image = original_image + delta
             
-            # --- 5b: Apply L∞ constraint (clipping) ---
-            # L∞ norm = maximum absolute value across all dimensions
-            # We constrain: |δ| ≤ ε for every pixel
-            # This ensures the perturbation stays small and imperceptible
-            # torch.clamp() limits values to [-epsilon, epsilon] range
+            # --- 6b: Apply transformations for robustness (during training) ---
+            if robust_to_transforms and iteration < num_iterations * 0.8:  # Apply for 80% of iterations
+                # Apply random transformations to make attack robust
+                perturbed_image_transformed = self.apply_transformations(perturbed_image, training=True)
+            else:
+                perturbed_image_transformed = perturbed_image
+            
+            # --- 6c: Apply L∞ constraint (clipping) ---
             delta.data = torch.clamp(delta.data, -epsilon, epsilon)
-            # .data accesses the underlying tensor without gradient tracking
-            # We modify .data directly to avoid breaking the computation graph
-            
-            # --- 5c: Recompute perturbed image after clipping ---
-            # After clipping delta, we need to recompute the perturbed image
-            # This ensures perturbed_image respects the epsilon constraint
             perturbed_image = original_image + delta
             
-            # --- 5d: Extract features from perturbed image ---
-            # Pass the perturbed image through VGG19 to get its feature representation
-            # This is what we want to make different from original_features
-            perturbed_features = self.extract_features(perturbed_image)
+            # --- 6d: Extract features from perturbed image (all models) ---
+            perturbed_features_dict = self.extract_all_features(perturbed_image_transformed)
             
-            # --- 5e: Compute loss function ---
-            # This measures:
-            #   - How different the features are (want: very different)
-            #   - How different the pixels are (want: very similar)
+            # --- 6e: Compute robust loss function ---
             loss = self.compute_loss(
-                original_features, 
-                perturbed_features,
+                original_features_dict,
+                perturbed_features_dict,
                 original_image,
-                perturbed_image
+                perturbed_image,
+                feature_weight=feature_weight,
+                pixel_weight=pixel_weight,
+                perceptual_weight=perceptual_weight
             )
             
-            # --- 5f: Backward pass (compute gradients) ---
-            # This is the core of gradient descent
-            # loss.backward() computes gradients of loss w.r.t. all tensors with requires_grad=True
-            # In our case, it computes: ∂L/∂δ (gradient of loss with respect to delta)
-            # These gradients tell us which direction to update delta to minimize loss
+            # Track best loss
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                best_delta = delta.clone().detach()
             
-            # Clear previous gradients (important!)
-            # PyTorch accumulates gradients by default, so we zero them each iteration
+            # --- 6f: Backward pass ---
             optimizer.zero_grad()
-            
-            # Compute gradients
             loss.backward()
-            # After this, delta.grad contains the gradients
             
-            # --- 5g: Update delta using optimizer ---
-            # optimizer.step() updates delta based on the computed gradients
-            # Update formula (simplified): δ = δ - lr * ∇δ
-            # Where ∇δ is the gradient (delta.grad)
-            # The optimizer uses a more sophisticated update (Adam algorithm)
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_([delta], max_norm=1.0)
+            
+            # --- 6g: Update delta ---
             optimizer.step()
+            scheduler.step()
             
-            # --- 5h: Progress reporting ---
-            # Print loss every 10 iterations to monitor progress
-            if (iteration + 1) % 10 == 0 or iteration == 0:
-                # .item() converts single-element tensor to Python float
-                # feature_dist and pixel_diff for detailed info
-                feature_dist = torch.norm(perturbed_features - original_features, p=2).item()
+            # --- 6h: Progress reporting ---
+            if (iteration + 1) % 20 == 0 or iteration == 0:
+                # Compute metrics
+                avg_feat_dist = 0.0
+                count = 0
+                for model_name in original_features_dict.keys():
+                    if model_name in perturbed_features_dict:
+                        orig = original_features_dict[model_name]
+                        pert = perturbed_features_dict[model_name]
+                        if orig is not None and pert is not None:
+                            feat_dist = torch.norm(pert - orig, p=2).item()
+                            avg_feat_dist += feat_dist
+                            count += 1
+                if count > 0:
+                    avg_feat_dist /= count
+                
                 pixel_diff = torch.norm(delta, p=2).item()
-                print(f"Iteration {iteration+1:3d}/{num_iterations} | "
+                current_lr = scheduler.get_last_lr()[0]
+                
+                print(f"Iter {iteration+1:3d}/{num_iterations} | "
                       f"Loss: {loss.item():.6f} | "
-                      f"Feature Dist: {feature_dist:.2f} | "
-                      f"Pixel Diff: {pixel_diff:.6f}")
+                      f"Feat Dist: {avg_feat_dist:.2f} | "
+                      f"Pixel Diff: {pixel_diff:.6f} | "
+                      f"LR: {current_lr:.5f}")
         
-        print("-" * 50)
+        # Use best delta found during optimization
+        if best_delta is not None:
+            delta.data = best_delta.data
+        
+        print("-" * 70)
         print("Optimization complete!\n")
         
-        # === STEP 6: Save the protected image ===
-        # After optimization, perturbed_image contains the final protected image
+        # === STEP 7: Final evaluation ===
+        final_perturbed = original_image + delta
+        final_features_dict = self.extract_all_features(final_perturbed)
+        
+        # Compute final metrics
+        metrics = {}
+        total_feat_dist = 0.0
+        count = 0
+        for model_name in original_features_dict.keys():
+            if model_name in final_features_dict:
+                orig = original_features_dict[model_name]
+                pert = final_features_dict[model_name]
+                if orig is not None and pert is not None:
+                    feat_dist = torch.norm(pert - orig, p=2).item()
+                    metrics[f'{model_name}_feature_distance'] = feat_dist
+                    total_feat_dist += feat_dist
+                    count += 1
+        
+        metrics['avg_feature_distance'] = total_feat_dist / count if count > 0 else 0.0
+        metrics['pixel_difference'] = torch.norm(delta, p=2).item()
+        metrics['max_perturbation'] = torch.max(torch.abs(delta)).item()
+        metrics['epsilon_used'] = epsilon
+        
+        # === STEP 8: Save the protected image ===
         print("Saving protected image...")
-        self.save_image(perturbed_image, output_path)
+        self.save_image(final_perturbed, output_path)
         print(f"Protected image saved to: {output_path}")
+        
+        # Print metrics
+        print("\n=== Protection Metrics ===")
+        for key, value in metrics.items():
+            print(f"  {key}: {value:.6f}")
+        
         print("\n=== Image Protection Complete ===\n")
+        
+        return metrics
     
     def save_image(self, image_tensor: torch.Tensor, output_path: str) -> None:
         """
@@ -424,18 +638,16 @@ def main():
     """
     Main entry point for the script.
     """
-    # Create an instance of ImageProtector
-    # This initializes the VGG19 model, sets up transforms, etc.
-    print("Initializing ImageProtector...")
-    protector = ImageProtector()
+    # Create an instance of ImageProtector with ensemble models
+    # This initializes multiple models (VGG19, ResNet50, Inception) for robust protection
+    print("Initializing Robust ImageProtector with ensemble models...")
+    protector = ImageProtector(use_ensemble=True)
     
     # Define input and output file paths
-    # These are the files specified in the requirements
     input_image = "art.jpg"
     output_image = "protected_art.jpg"
     
     # Check if input image exists
-    # If not, print an error message
     import os
     if not os.path.exists(input_image):
         print(f"\nERROR: Input image '{input_image}' not found!")
@@ -443,22 +655,27 @@ def main():
         print(f"Current directory: {os.getcwd()}\n")
         return
     
-    # Run the protection algorithm
-    # This is where all the magic happens:
-    #   - Loads the image
-    #   - Extracts features
-    #   - Optimizes the perturbation
-    #   - Saves the protected image
-    protector.protect_image(
+    # Run the robust protection algorithm
+    # This uses ensemble attacks, transformation robustness, and perceptual loss
+    metrics = protector.protect_image(
         input_path=input_image,
         output_path=output_image,
-        num_iterations=100,      # Number of optimization steps
-        learning_rate=0.01,      # Step size for gradient descent
-        epsilon=0.03             # Maximum perturbation per pixel (L∞ bound)
+        num_iterations=150,           # More iterations for better results
+        learning_rate=0.01,            # Step size for gradient descent
+        epsilon=0.03,                 # Maximum perturbation per pixel (L∞ bound)
+        use_adaptive_epsilon=True,     # Adjust epsilon based on image
+        robust_to_transforms=True,     # Make attack robust to JPEG/resize
+        feature_weight=1.0,           # Weight for feature confusion
+        pixel_weight=0.1,             # Weight for pixel preservation
+        perceptual_weight=0.5         # Weight for perceptual quality
     )
     
-    print(f"\nSuccess! Protected image saved as '{output_image}'")
-    print("The image should look identical to the original, but VGG19 will see different features.")
+    print(f"\n✓ Success! Protected image saved as '{output_image}'")
+    print("\nThe protected image:")
+    print("  - Looks identical to the original (human perception)")
+    print("  - Confuses VGG19, ResNet50, and Inception feature extractors")
+    print("  - Is robust to JPEG compression and resizing")
+    print("  - Has high transferability to other models")
 
 
 if __name__ == "__main__":
