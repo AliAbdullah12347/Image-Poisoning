@@ -23,6 +23,16 @@ This project implements a robust adversarial attack on images to protect them fr
   - File upload support
   - Returns protected image as stream
 
+### Phase 3: Frontend (✅ Complete)
+- **Status**: Next.js 14 frontend implemented
+- **Goal**: Sleek web interface for artists
+- **Features**:
+  - Drag & drop image upload
+  - Before/after comparison slider
+  - Loading animations with progress
+  - Metrics display
+  - Dark mode support
+
 ## Environment Setup
 
 ### Install Dependencies
@@ -45,7 +55,12 @@ pip install -r requirements.txt
 ├── requirements.txt        # Python dependencies
 ├── README.md              # This file
 ├── API_README.md          # API documentation
-└── ROBUSTNESS_IMPROVEMENTS.md  # Robustness features documentation
+├── ROBUSTNESS_IMPROVEMENTS.md  # Robustness features documentation
+└── frontend/               # Next.js frontend (Phase 3)
+    ├── app/               # Next.js app directory
+    ├── components/        # React components
+    ├── package.json       # Node.js dependencies
+    └── README.md          # Frontend documentation
 ```
 
 ## Quick Start
@@ -81,6 +96,32 @@ python test_api.py
 
 See `API_README.md` for detailed API documentation.
 
+### Phase 3: Frontend Usage
+
+1. **Start Python backend:**
+```bash
+python api.py
+```
+
+2. **Start Next.js frontend:**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+3. **Open browser:**
+Navigate to [http://localhost:3000](http://localhost:3000)
+
+4. **Use the interface:**
+- Drag & drop or click to upload image
+- Click "Protect Image"
+- Wait for processing (30-120 seconds)
+- Compare original vs protected with slider
+- Download protected image
+
+See `frontend/README.md` for detailed frontend documentation.
+
 ## Algorithm Concept
 1. Load pre-trained VGG19 model (frozen)
 2. Extract feature maps from a middle layer
@@ -101,6 +142,14 @@ See `API_README.md` for detailed API documentation.
 - **Fast Response**: Optimized for speed
 - **Easy Integration**: Simple REST API
 - **Production Ready**: Error handling, validation, logging
+
+### Frontend Features
+- **Modern UI**: Clean, responsive design with Tailwind CSS
+- **Drag & Drop**: Easy image upload with react-dropzone
+- **Comparison Slider**: Before/after comparison with react-compare-slider
+- **Loading States**: Beautiful loading animations with progress tracking
+- **Metrics Display**: Shows processing time and protection metrics
+- **Dark Mode**: Automatic dark mode support
 
 ## Notes
 - Models are not trained; they're used for feature extraction only
